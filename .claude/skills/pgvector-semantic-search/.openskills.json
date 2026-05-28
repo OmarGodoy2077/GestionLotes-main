@@ -1,0 +1,7 @@
+{
+  "source": "timescale/pg-aiguide",
+  "sourceType": "git",
+  "repoUrl": "https://github.com/timescale/pg-aiguide",
+  "subpath": "skills\\pgvector-semantic-search",
+  "installedAt": "2026-05-28T02:30:35.829Z"
+}

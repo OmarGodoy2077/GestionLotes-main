@@ -1,0 +1,7 @@
+{
+  "source": "timescale/pg-aiguide",
+  "sourceType": "git",
+  "repoUrl": "https://github.com/timescale/pg-aiguide",
+  "subpath": "skills\\setup-timescaledb-hypertables",
+  "installedAt": "2026-05-28T02:30:35.860Z"
+}

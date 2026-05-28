@@ -1,0 +1,14 @@
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+watchPatterns = ["backend/**"]
+
+[deploy]
+numReplicas = 1
+restartPolicyType = "on_failure"
+healthcheckPath = "/health"
+healthcheckTimeout = 5
+startCommand = "node dist/main.js"
+
+[deploy.preDeployCommand]
+command = "pnpm exec prisma migrate deploy"
