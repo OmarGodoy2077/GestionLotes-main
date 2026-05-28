@@ -1,6 +1,6 @@
-# Estado del Proyecto — GestionLotes (Fase 3 — DB aplicada + Auditoría automática)
+# Estado del Proyecto — GestionLotes (Fase 3 — DB aplicada + Auditoría automática + Hardening)
 
-> Actualizado al cierre de Fase 3.1 + auditoría automática (3.1.1).
+> Actualizado al cierre de Fase 3.1 + auditoría automática (3.1.1) + hardening de config (3.1.2).
 > Reemplaza al `STATE.md` raíz de Fase 1.
 
 ---
@@ -43,7 +43,17 @@
 
 ---
 
-## Stack
+## Resumen de Fase 3.1.2 — Hardening de config (post-mortem de fixes anteriores)
+
+> Después de aplicar la auditoría detectamos que varios "fixes en el momento" eran parches funcionales pero podían romper más adelante. Auditoría completa + remediación.
+
+| Hallazgo | Riesgo | Fix aplicado |
+|---|---|---|
+| `package.json` con `^` y lockfile permisivo (Prisma instalado 5.22 en vez del 5.13 declarado) | Drift de versiones en builds futuros sin lockfile, mismatch entre `prisma` CLI y `@prisma/client` | **`prisma` y `@prisma/client` pinneados en `5.22.0` EXACTO**. Resto con `~` (sólo patches). Lockfile regenerado y verificado. |
+| Dockerfile producción copiaba `node_modules/@prisma` y `node_modules/.prisma` desde builder | pnpm usa symlinks → al COPY el target no viaja → binding nativo del query_engine falla en runtime → **el primer deploy a Railway habría fallado** | Reemplazar los 2 `COPY --from=builder` por un `RUN pnpm exec prisma generate` en production stage (re-genera ~2s, estructura correcta). |
+| Extensión Prisma no tenía guard anti-recursión | Si alguien agregaba `AuditLog` a `AUDITED_MODELS` por error → bucle infinito (cada audit dispara otro audit) | Lista `FORBIDDEN_AUDIT_MODELS = {"AuditLog"}` + función `isAuditableModel()` aplicada en los 6 hooks (create/update/delete/upsert/updateMany/deleteMany). Verificado runtime: insertar manualmente en `audit_logs` NO dispara recursión. |
+| Decisiones de config sin documentar (tsconfig sin declarations, migrations fuera de prisma/) | Próximo desarrollador "limpia" sin saber por qué | Nuevo archivo `backend/CONFIG-NOTES.md` con 6 secciones explicando cada decisión y cómo actuar si necesita cambiarse. Skill `gestionlotes-db` actualizado con sección "Trampas conocidas" + 4 reglas de oro nuevas (8-11). |
+| `migrate reset` end-to-end | Confirmar que el camino completo se reproduce desde cero (lo que Railway hace) | `pnpm exec prisma migrate reset --force` ejecutado: DB drop → 2 migraciones aplicadas → seed corrido → datos verificados |
 
 | Capa | Versión instalada |
 |---|---|

@@ -1,3 +1,8 @@
+# ============================================================================
+# Dockerfile multi-stage para el backend GestionLotes.
+# Stages: builder → development | production
+# ============================================================================
+
 # ---- Build Stage ----
 FROM node:20-alpine AS builder
 
@@ -10,7 +15,13 @@ WORKDIR /app
 COPY package.json pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
 
-# Copiar prisma ANTES del generate, y antes del build (tsc lee @prisma/client tipados)
+# Copiar el schema modular y las migraciones ANTES de `prisma generate`.
+# Notas importantes:
+#   - `prisma/` contiene el schema modular (preview `prismaSchemaFolder`).
+#   - `migrations/` está como HERMANA de `prisma/` por convención de Prisma
+#     cuando se usa esa preview apuntando a la carpeta `./prisma`. Si copias
+#     SOLO `prisma/`, `prisma migrate deploy` falla en runtime con
+#     "No migration found". Verificar con `prisma migrate status`.
 COPY prisma ./prisma
 COPY migrations ./migrations
 RUN pnpm exec prisma generate
@@ -20,6 +31,7 @@ COPY src ./src
 
 RUN pnpm run build
 
+
 # ---- Development Stage ----
 FROM builder AS development
 
@@ -27,6 +39,7 @@ COPY . .
 RUN pnpm install
 
 CMD ["pnpm", "run", "dev"]
+
 
 # ---- Production Stage ----
 FROM node:20-alpine AS production
@@ -37,15 +50,25 @@ RUN corepack enable
 
 WORKDIR /app
 
+# Instalación con --prod respeta el lockfile y excluye devDependencies.
 COPY package.json pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile --prod
 
-# Prisma schema + migraciones se necesitan en runtime para `migrate deploy`.
+# Schema + migraciones se necesitan en runtime para `prisma migrate deploy`
+# (Railway lo ejecuta en preDeployCommand).
 COPY prisma ./prisma
 COPY migrations ./migrations
+
+# IMPORTANTE: regeneramos el cliente Prisma en este stage en lugar de copiarlo
+# del builder. Razón: con pnpm, `node_modules/@prisma/client` es un SYMLINK a
+# `node_modules/.pnpm/@prisma+client@<version>/node_modules/@prisma/client`.
+# Copiar el symlink "tal cual" desde otro stage no preserva la estructura
+# `.pnpm/...`, y el binding nativo (`query_engine-linux-musl.node`) falla en
+# runtime con "Cannot find module". Regenerar es rápido (<2s) y robusto.
+RUN pnpm exec prisma generate
+
+# Compilado JS — ya no necesita TS ni nada más del builder.
 COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
-COPY --from=builder /app/node_modules/@prisma ./node_modules/@prisma
 
 RUN addgroup -g 1001 -S nodejs && \
     adduser -S nodejs -u 1001

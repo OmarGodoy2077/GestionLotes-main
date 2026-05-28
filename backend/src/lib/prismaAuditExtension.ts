@@ -47,6 +47,10 @@ export function runWithAuditContext<T>(
 
 /// Modelos que se auditan automáticamente. El nombre debe coincidir EXACTO con
 /// el del modelo Prisma (no el `@@map`).
+///
+/// ⚠️ NUNCA agregar "AuditLog" a esta lista. Auditar la propia tabla de audit
+/// genera recursión infinita (cada create de audit_log dispararía otro). Está
+/// además protegido por el guard `isAuditableModel()` más abajo.
 const AUDITED_MODELS = new Set<string>([
   "User",
   "Client",
@@ -59,6 +63,19 @@ const AUDITED_MODELS = new Set<string>([
   "Block",
   "Project",
 ]);
+
+/// Modelos que NUNCA deben ser auditados, incluso si alguien los agrega por
+/// error a `AUDITED_MODELS`. Protección de último recurso contra recursión.
+const FORBIDDEN_AUDIT_MODELS = new Set<string>([
+  "AuditLog", // recursión infinita
+]);
+
+/// Decide si una operación sobre un modelo debe ser auditada.
+/// Doble guard: debe estar EN `AUDITED_MODELS` y NO estar en `FORBIDDEN`.
+function isAuditableModel(model: string): boolean {
+  if (FORBIDDEN_AUDIT_MODELS.has(model)) return false;
+  return AUDITED_MODELS.has(model);
+}
 
 /// Nombre lógico de la entidad que se persiste en `audit_logs.entity`
 /// (snake_case del `@@map`, consistente con el nombre real de la tabla).
@@ -138,7 +155,7 @@ export function applyAuditExtension(client: PrismaClient) {
     query: {
       $allModels: {
         async create({ model, args, query }) {
-          if (!AUDITED_MODELS.has(model)) return query(args);
+          if (!isAuditableModel(model)) return query(args);
           const result = (await query(args)) as { id?: string };
           await safeAudit({
             action: "CREATE",
@@ -150,7 +167,7 @@ export function applyAuditExtension(client: PrismaClient) {
         },
 
         async update({ model, args, query }) {
-          if (!AUDITED_MODELS.has(model)) return query(args);
+          if (!isAuditableModel(model)) return query(args);
           const before = await readBefore(
             model,
             (args as { where: unknown }).where
@@ -167,7 +184,7 @@ export function applyAuditExtension(client: PrismaClient) {
         },
 
         async delete({ model, args, query }) {
-          if (!AUDITED_MODELS.has(model)) return query(args);
+          if (!isAuditableModel(model)) return query(args);
           const before = await readBefore(
             model,
             (args as { where: unknown }).where
@@ -183,7 +200,7 @@ export function applyAuditExtension(client: PrismaClient) {
         },
 
         async upsert({ model, args, query }) {
-          if (!AUDITED_MODELS.has(model)) return query(args);
+          if (!isAuditableModel(model)) return query(args);
           const before = await readBefore(
             model,
             (args as { where: unknown }).where
@@ -200,7 +217,7 @@ export function applyAuditExtension(client: PrismaClient) {
         },
 
         async updateMany({ model, args, query }) {
-          if (!AUDITED_MODELS.has(model)) return query(args);
+          if (!isAuditableModel(model)) return query(args);
           const result = (await query(args)) as { count: number };
           await safeAudit({
             action: "UPDATE",
@@ -217,7 +234,7 @@ export function applyAuditExtension(client: PrismaClient) {
         },
 
         async deleteMany({ model, args, query }) {
-          if (!AUDITED_MODELS.has(model)) return query(args);
+          if (!isAuditableModel(model)) return query(args);
           const result = (await query(args)) as { count: number };
           await safeAudit({
             action: "DELETE",

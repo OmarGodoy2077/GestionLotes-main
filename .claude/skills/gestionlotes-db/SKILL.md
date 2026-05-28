@@ -26,6 +26,21 @@ Documentos relacionados (leerlos si la modificación es no trivial):
 - `docs/STATE.md` — estado actual del schema y módulos
 - `docs/DOCKER-DB-GUIDE.md` — psql, pgAdmin, troubleshooting
 - `docs/API.md` — endpoints (útil para verificar qué módulos pueden romperse)
+- `backend/CONFIG-NOTES.md` — decisiones de configuración (tsconfig, pnpm, Dockerfile, lockfile). **Léelo antes de tocar configs.**
+
+---
+
+## Trampas conocidas en este proyecto (LEER ANTES DE TOCAR)
+
+| Trampa | Detalle |
+|---|---|
+| Las migraciones viven en `backend/migrations/` (NO en `backend/prisma/migrations/`) | Con `previewFeatures = ["prismaSchemaFolder"]` apuntando a `./prisma`, Prisma las pone como hermanas. El CLI dice `"X migrations found in prisma/migrations"` pero el path REAL es `backend/migrations/`. El Dockerfile copia ambas. |
+| El cliente Prisma exportado en `src/lib/prisma.ts` es EXTENDIDO con audit | El tipo `Prisma.TransactionClient` ya no encaja. Usar `TxClient` de `src/lib/prismaTypes.ts`. |
+| Auditoría: lista bloqueada `FORBIDDEN_AUDIT_MODELS` contiene `AuditLog` | Es el guard anti-recursión. Si lo quitas, cada CREATE de audit_log dispara otro create de audit_log → bucle infinito. |
+| `prisma` + `@prisma/client` están pinneados en versión EXACTA | Acoplados — mismatch causa "Engine version mismatch". Actualizar ambos a la vez. |
+| `declaration: true` en `tsconfig.json` rompe con pnpm + Express types | Por eso está OFF. No reactivar sin leer `backend/CONFIG-NOTES.md` sección 1. |
+| El seed usa el cliente Prisma BASE (no extendido) | Intencional — no queremos audit logs del bootstrap. Si necesitas auditar el seed por alguna razón, importa el cliente extendido explícitamente. |
+| `prisma generate` en producción Docker está DUPLICADO (builder + production stage) | Intencional. En production stage REGENERA en vez de copiar de builder porque pnpm usa symlinks que no sobreviven `COPY --from`. |
 
 ---
 
@@ -35,15 +50,23 @@ Documentos relacionados (leerlos si la modificación es no trivial):
 
 2. **NUNCA editar un archivo `migration.sql` que ya fue aplicado.** Prisma chequea hashes; modificar uno aplicado rompe el historial y futuras DBs (incluida la de Railway) no podrán reproducirlo. Si está mal, crear una migración correctiva nueva.
 
-3. **NUNCA borrar carpetas de `prisma/migrations/` manualmente.** Cada migración representa un paso histórico. Borrarlas hace que Railway pierda el camino para reconstruir.
+3. **NUNCA borrar carpetas de `migrations/` manualmente.** Cada migración representa un paso histórico. Borrarlas hace que Railway pierda el camino para reconstruir.
 
 4. **SIEMPRE generar las migraciones DESDE el backend con `pnpm exec prisma migrate dev`.** No usar `npx prisma` ni instalar Prisma global — el proyecto usa pnpm 9.
 
-5. **SIEMPRE commitear juntos** los cambios del schema Y la nueva carpeta `prisma/migrations/<timestamp>_xxx/`. Si solo subes el schema, otra máquina (o Railway) no tendrá la migración correspondiente.
+5. **SIEMPRE commitear juntos** los cambios del schema Y la nueva carpeta `migrations/<timestamp>_xxx/`. Si solo subes el schema, otra máquina (o Railway) no tendrá la migración correspondiente.
 
 6. **Los enums son tipos PostgreSQL — agregar/quitar valores requiere migración.** No basta con editar el enum en TypeScript.
 
 7. **Los campos `Decimal` para dinero NO se cambian a `Float`.** Si necesitas cambiar la precisión, usa `@db.Decimal(p, s)` con nueva precisión y crea migración.
+
+8. **NUNCA agregar `AuditLog` a `AUDITED_MODELS`** en `src/lib/prismaAuditExtension.ts`. Auditaría sus propias inserciones → recursión infinita. Existe un guard `FORBIDDEN_AUDIT_MODELS` que lo bloquea, pero la primera línea de defensa es la disciplina.
+
+9. **NUNCA usar `Prisma.TransactionClient` como tipo** en callbacks de `$transaction`. Usar `TxClient` de `src/lib/prismaTypes.ts`. Con el cliente extendido (auditoría), el tipo de la librería ya no encaja.
+
+10. **NUNCA actualizar `prisma` sin actualizar `@prisma/client` a la misma versión** (y viceversa). Están acoplados; un mismatch causa "Engine version mismatch" en runtime. Ambos están pinneados en versión EXACTA en `package.json` por esta razón.
+
+11. **NUNCA hacer `pnpm install --no-frozen-lockfile`** salvo que estés deliberadamente actualizando dependencias. CI/Docker SIEMPRE con `--frozen-lockfile`.
 
 ---
 
