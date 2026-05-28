@@ -1,0 +1,103 @@
+// =====================================================================
+// SCHEMA USERS — Usuarios del sistema y auditoría
+// =====================================================================
+
+/// Usuario del sistema (operador de la oficina).
+model User {
+  id        String  @id @default(uuid())
+  /// Nombre de usuario único.
+  username  String  @unique
+  /// Correo electrónico único.
+  email     String  @unique
+  /// Hash del password (bcrypt, salt rounds ≥ 12). NUNCA en texto plano.
+  password  String
+  /// Nombre completo del usuario.
+  fullName  String
+  /// Rol de acceso.
+  role      UserRole @default(VIEWER)
+  /// Si el usuario está activo. Soft disable.
+  isActive  Boolean  @default(true)
+
+  /// Última fecha de login exitoso.
+  lastLoginAt DateTime?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  /// Pagos que este usuario registró.
+  paymentsRegistered Payment[]      @relation("PaymentsRegistered")
+  /// Sesiones de caja abiertas por este usuario.
+  cashSessionsOpened CashSession[]  @relation("CashSessionsOpened")
+  /// Sesiones de caja cerradas por este usuario.
+  cashSessionsClosed CashSession[]  @relation("CashSessionsClosed")
+  /// Registros de auditoría generados por este usuario.
+  auditLogs          AuditLog[]
+
+  @@index([role])
+  @@index([isActive])
+  @@map("users")
+}
+
+/// Registro de auditoría para acciones críticas del sistema.
+/// Guarda snapshots JSONB antes/después para forense.
+///
+/// Captura automática (CUD sobre entidades críticas) vía extensión de Prisma
+/// en `src/lib/prismaAuditExtension.ts`. Acciones de negocio que necesitan
+/// contexto adicional (login fallido, cancelación de contrato con razón, etc.)
+/// se registran explícitamente con `src/lib/audit.ts → writeAuditLog()`.
+///
+/// Para login fallido `userId` puede ser null (no se conoce el usuario o el
+/// username no existe). En ese caso `entityId` guarda el username intentado y
+/// `notes` contiene la razón del rechazo.
+model AuditLog {
+  id String @id @default(uuid())
+
+  /// Usuario que ejecutó la acción (null si fue acción del sistema o login fallido sin match).
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  /// Tipo de acción.
+  action AuditAction
+  /// Resultado de la acción. Default SUCCESS — los handlers escriben FAILED cuando aplique.
+  status AuditStatus @default(SUCCESS)
+
+  /// Nombre de la entidad afectada (ej: "contracts", "payments").
+  entity String
+  /// ID del registro afectado en la entidad. Para LOGIN_FAILED puede ser el
+  /// username/email intentado en lugar de un UUID real.
+  entityId String
+
+  /// Snapshot del registro antes del cambio (campos sensibles ya saneados).
+  beforeData Json?
+  /// Snapshot del registro después del cambio (campos sensibles ya saneados).
+  afterData  Json?
+
+  /// Identificador único de la petición HTTP que originó la acción. Permite
+  /// agrupar todos los AuditLog generados por una misma request (ej: crear un
+  /// contrato genera múltiples entries — todos comparten requestId).
+  requestId String?
+
+  /// Dirección IP desde la que se ejecutó la acción.
+  ipAddress String?
+  /// User-Agent del cliente (opcional).
+  userAgent String?
+
+  /// Observaciones libres (razón de la acción, motivo del rechazo, etc.).
+  notes String?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([entity])
+  @@index([entityId])
+  @@index([action])
+  @@index([status])
+  @@index([requestId])
+  @@index([createdAt])
+  /// Índice compuesto para consultar el historial completo de una entidad
+  /// concreta en orden cronológico (queries del tipo "ver todo lo que pasó
+  /// con el contrato X").
+  @@index([entity, entityId, createdAt])
+  @@map("audit_logs")
+}

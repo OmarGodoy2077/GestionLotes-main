@@ -1,0 +1,98 @@
+// =====================================================================
+// SCHEMA PROJECTS — Proyectos, Manzanas y Lotes
+// =====================================================================
+//
+// Identificación única de un lote:
+//   Proyecto + Manzana + Número de lote
+// Se garantiza con @@unique([blockId, lotNumber]) ya que cada manzana
+// pertenece a un único proyecto.
+
+/// Proyecto (lotificación) de la empresa.
+model Project {
+  id          String  @id @default(uuid())
+  /// Nombre del proyecto (ej: "La Pradera", "Las Flores").
+  name        String  @unique
+  /// Descripción breve del proyecto.
+  description String?
+  /// Dirección o ubicación general del proyecto.
+  address     String?
+  /// Si el proyecto está activo en el sistema.
+  isActive    Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// Manzanas que componen este proyecto.
+  blocks Block[]
+
+  @@index([isActive])
+  @@map("projects")
+}
+
+/// Manzana o bloque dentro de un proyecto. Agrupa lotes.
+model Block {
+  id          String  @id @default(uuid())
+  /// Nombre o identificador de la manzana (ej: "A", "Manzana B").
+  name        String
+  /// Descripción opcional.
+  description String?
+
+  /// Proyecto al que pertenece (FK).
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// Lotes contenidos en esta manzana.
+  lots Lot[]
+
+  /// Una manzana no puede repetirse dentro del mismo proyecto.
+  @@unique([projectId, name])
+  @@index([projectId])
+  @@map("blocks")
+}
+
+/// Lote individual dentro de una manzana.
+/// La identificación única se da por (Proyecto → Manzana → Número de lote).
+model Lot {
+  id        String  @id @default(uuid())
+  /// Número del lote dentro de la manzana (ej: "12", "12-A").
+  /// Se almacena como string para soportar nomenclaturas no estrictamente numéricas.
+  lotNumber String
+  /// Área del lote en metros cuadrados.
+  area      Decimal @db.Decimal(12, 2)
+  /// Precio base (vigente) del lote. Para contratos se toma snapshot.
+  basePrice Decimal @db.Decimal(14, 2)
+  /// Calle o avenida frente al lote (opcional).
+  street    String?
+  /// Si el lote es esquinero.
+  isCorner  Boolean @default(false)
+
+  /// Estado actual del lote dentro del inventario.
+  status LotStatus @default(AVAILABLE)
+  /// Uso/tipo del lote.
+  type   LotType   @default(RESIDENTIAL)
+
+  /// Atributos adicionales de ubicación (zona, sector, etapa, coordenadas, etc.)
+  /// almacenados como JSONB para evolución del schema sin migraciones.
+  metadata Json?
+
+  /// Manzana a la que pertenece (FK).
+  blockId String
+  block   Block  @relation(fields: [blockId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  /// Líneas de contrato en las que aparece este lote (histórico).
+  contractLots ContractLot[]
+
+  /// Un número de lote no puede repetirse dentro de la misma manzana.
+  @@unique([blockId, lotNumber])
+  @@index([blockId])
+  @@index([status])
+  @@index([type])
+  @@map("lots")
+}

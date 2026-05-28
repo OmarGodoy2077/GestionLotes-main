@@ -1,0 +1,160 @@
+// =====================================================================
+// SCHEMA CLIENTS — Clientes, Ocupación y Gestores
+// =====================================================================
+
+/// Cliente del sistema. Persona que adquiere uno o más lotes.
+model Client {
+  id   String @id @default(uuid())
+  /// Código autogenerado e interno (ej: "CLI-2025-0001").
+  code String @unique
+
+  /// Nombre completo del cliente.
+  fullName String
+  /// Dirección de residencia.
+  address  String?
+  /// Teléfono principal.
+  phone    String?
+  /// DPI (Documento Personal de Identificación) — para extranjeros
+  /// guarda el documento de identificación correspondiente (pasaporte, etc.).
+  /// Ver `isForeign` para interpretar semánticamente este campo.
+  dpi      String? @unique
+  /// Tipo del documento si es extranjero (ej: "PASSPORT", "FOREIGN_ID").
+  /// Cuando isForeign = false se interpreta siempre como DPI.
+  dpiType  String?
+  /// NIT (Número de Identificación Tributaria) — opcional.
+  nit      String?
+  /// Correo electrónico — opcional.
+  email    String?
+  /// Fecha de nacimiento.
+  birthDate    DateTime?
+  /// Nacionalidad (ej: "Guatemalteca").
+  nationality  String?
+  /// Estado civil.
+  maritalStatus MaritalStatus?
+  /// Tipo de domicilio del cliente.
+  housingType   HousingType?
+  /// Profesión u oficio (texto libre, distinto de la ocupación laboral).
+  profession    String?
+
+  /// Si el cliente es extranjero — afecta la interpretación de `dpi`/`dpiType`.
+  isForeign   Boolean @default(false)
+  /// Si el cliente vive fuera del país. Útil para flujos con gestores.
+  livesAbroad Boolean @default(false)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  /// Información laboral / ocupacional (1-a-1).
+  occupation ClientOccupation?
+  /// Gestores asociados al cliente a lo largo del tiempo.
+  gestors    ClientGestor[]
+  /// Contratos del cliente.
+  contracts  Contract[]
+  /// Veces que este cliente actúa como Gestor de otros clientes.
+  asGestor   Gestor[]          @relation("GestorLinkedClient")
+
+  @@index([fullName])
+  @@index([phone])
+  @@index([email])
+  @@map("clients")
+}
+
+/// Información laboral/ocupacional del cliente.
+/// Diseño flexible — los campos rellenos dependen de `type`.
+model ClientOccupation {
+  id   String         @id @default(uuid())
+  type OccupationType
+
+  // --- Campos de EMPLOYED ---
+  companyName    String?
+  companyAddress String?
+  companyPhone   String?
+  position       String?
+  /// Años trabajando en la empresa (puede combinarse con `tenureMonths`).
+  tenureYears    Int?
+  tenureMonths   Int?
+
+  // --- Campos de SELF_EMPLOYED ---
+  businessName    String?
+  businessAddress String?
+  businessPhone   String?
+  businessType    String?
+
+  // --- Ingresos (aplica para EMPLOYED y SELF_EMPLOYED) ---
+  monthlyIncome Decimal? @db.Decimal(12, 2)
+  otherIncome   Decimal? @db.Decimal(12, 2)
+
+  /// Notas adicionales sobre la situación laboral.
+  notes String?
+
+  /// Cliente al que pertenece (1-a-1).
+  clientId String @unique
+  client   Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("client_occupations")
+}
+
+/// Gestor — persona que actúa en representación de un cliente.
+/// Puede o no ser un cliente registrado en el sistema:
+///   - Si lo es: se vincula con `linkedClientId`.
+///   - Si no lo es: se guardan los datos inline (`fullName`, `dpi`, etc.).
+/// Un mismo gestor puede ser referenciado por múltiples contratos.
+model Gestor {
+  id String @id @default(uuid())
+
+  /// Si el gestor también es cliente del sistema, se vincula aquí.
+  linkedClientId String?
+  linkedClient   Client? @relation("GestorLinkedClient", fields: [linkedClientId], references: [id], onDelete: SetNull)
+
+  // --- Datos inline (usados cuando NO es cliente registrado) ---
+  fullName     String?
+  dpi          String?
+  dpiType      String?
+  phone        String?
+  address      String?
+  birthDate    DateTime?
+  nationality  String?
+  housingType  HousingType?
+  notes        String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// Clientes a los que está asociado (histórico).
+  clientLinks ClientGestor[]
+  /// Contratos donde este gestor está asignado.
+  contracts   Contract[]
+
+  @@index([linkedClientId])
+  @@index([dpi])
+  @@map("gestors")
+}
+
+/// Tabla intermedia Cliente ↔ Gestor.
+/// Un cliente puede haber tenido varios gestores a lo largo del tiempo.
+model ClientGestor {
+  id String @id @default(uuid())
+
+  clientId String
+  client   Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  gestorId String
+  gestor   Gestor @relation(fields: [gestorId], references: [id], onDelete: Cascade)
+
+  /// Si esta vinculación está vigente (un cliente puede tener uno activo a la vez por convención).
+  isActive Boolean @default(true)
+  /// Notas (relación, parentesco, motivo).
+  notes    String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([clientId, gestorId])
+  @@index([clientId])
+  @@index([gestorId])
+  @@map("client_gestors")
+}

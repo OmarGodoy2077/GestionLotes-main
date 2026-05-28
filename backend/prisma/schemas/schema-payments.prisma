@@ -1,0 +1,163 @@
+// =====================================================================
+// SCHEMA PAYMENTS — Pagos, aplicaciones y sesiones de caja
+// =====================================================================
+//
+// Reglas de negocio (implementadas en `payments.service.ts`):
+//   - Cada pago aplica primero a mora, luego intereses, luego capital.
+//   - Si paga de más → se acumula en `Contract.creditBalance`.
+//   - Si paga de menos → la cuota queda en estado PARTIAL.
+//   - Los pagos en efectivo se vinculan a la `CashSession` abierta al momento.
+
+/// Pago registrado contra un contrato.
+/// Un pago puede aplicarse a una o más cuotas vía `PaymentApplication`.
+model Payment {
+  id            String @id @default(uuid())
+  /// Número de recibo autogenerado (ej: "REC-2025-0001").
+  receiptNumber String @unique
+
+  /// Contrato sobre el que se hace el pago.
+  contractId String
+  contract   Contract @relation(fields: [contractId], references: [id], onDelete: Restrict)
+
+  /// Usuario que registró el pago.
+  registeredById String?
+  registeredBy   User?   @relation("PaymentsRegistered", fields: [registeredById], references: [id], onDelete: SetNull)
+
+  /// Fecha del pago.
+  paymentDate DateTime @default(now())
+
+  // --- Montos ---
+
+  /// Monto total que se debía cobrar (cuotas + mora + intereses pendientes).
+  amountDue   Decimal @db.Decimal(14, 2)
+  /// Monto realmente pagado por el cliente.
+  amountPaid  Decimal @db.Decimal(14, 2)
+  /// Porción aplicada a mora (recargo por atraso).
+  lateFee     Decimal @db.Decimal(14, 2) @default(0)
+  /// Porción aplicada a intereses ordinarios.
+  interest    Decimal @db.Decimal(14, 2) @default(0)
+  /// Porción aplicada a capital.
+  principal   Decimal @db.Decimal(14, 2) @default(0)
+  /// Saldo a favor generado por este pago (si pagó de más).
+  creditApplied Decimal @db.Decimal(14, 2) @default(0)
+
+  // --- Forma de pago ---
+
+  method PaymentMethod
+
+  /// Si TRANSFER / DEPOSIT: cuenta destino.
+  bankAccountId String?
+  bankAccount   BankAccount? @relation(fields: [bankAccountId], references: [id], onDelete: SetNull)
+  /// Número de boleta de depósito o referencia de la transferencia.
+  voucherNumber String?
+
+  /// Si CHECK: número y banco emisor.
+  checkNumber String?
+  checkBank   String?
+
+  /// Si CASH: sesión de caja a la que pertenece.
+  cashSessionId String?
+  cashSession   CashSession? @relation(fields: [cashSessionId], references: [id], onDelete: SetNull)
+
+  /// Indica si el pago se aplicó directamente a capital (pago anticipado).
+  /// Cuando true, el servicio debe haber recalculado el PaymentSchedule
+  /// desde la cuota correspondiente en adelante.
+  isAdvancePayment Boolean @default(false)
+
+  /// Notas/observaciones del pago.
+  notes String?
+
+  /// Ruta o referencia al PDF generado del recibo (si está almacenado).
+  receiptFilePath String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// Aplicaciones (desglose) — a qué cuotas y conceptos se aplicó este pago.
+  applications PaymentApplication[]
+
+  @@index([contractId])
+  @@index([paymentDate])
+  @@index([method])
+  @@index([cashSessionId])
+  @@map("payments")
+}
+
+/// Aplicación individual de una porción del pago a una cuota o concepto.
+///
+/// Permite modelar:
+///   - Un pago que cubre varias cuotas (varias filas con scheduleId distinto).
+///   - Un pago que aplica parcialmente a mora, intereses y capital
+///     de la misma cuota (varias filas con tipos distintos).
+model PaymentApplication {
+  id String @id @default(uuid())
+
+  paymentId String
+  payment   Payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+
+  /// Cuota del calendario afectada. Puede ser null si la aplicación es a
+  /// CREDIT_BALANCE puro (no relacionada a una cuota específica).
+  scheduleId String?
+  schedule   PaymentSchedule? @relation(fields: [scheduleId], references: [id], onDelete: SetNull)
+
+  /// Tipo de aplicación (mora / interés / capital / enganche / saldo a favor).
+  type PaymentApplicationType
+  /// Monto aplicado.
+  amount Decimal @db.Decimal(14, 2)
+
+  createdAt DateTime @default(now())
+
+  @@index([paymentId])
+  @@index([scheduleId])
+  @@index([type])
+  @@map("payment_applications")
+}
+
+// =====================================================================
+// MÓDULO DE CUADRE DE CAJA
+// =====================================================================
+
+/// Sesión de caja — agrupa los pagos en efectivo de un día o turno.
+/// Al cerrar la sesión se calcula la diferencia entre lo esperado y lo contado.
+model CashSession {
+  id String @id @default(uuid())
+
+  /// Apertura.
+  openedAt   DateTime  @default(now())
+  /// Cierre (null mientras la sesión esté abierta).
+  closedAt   DateTime?
+
+  /// Usuario que abrió la sesión.
+  openedById String
+  openedBy   User   @relation("CashSessionsOpened", fields: [openedById], references: [id], onDelete: Restrict)
+  /// Usuario que cerró la sesión.
+  closedById String?
+  closedBy   User?  @relation("CashSessionsClosed", fields: [closedById], references: [id], onDelete: SetNull)
+
+  /// Monto inicial (fondo de caja).
+  openingAmount Decimal @db.Decimal(14, 2) @default(0)
+  /// Suma de los pagos CASH registrados durante la sesión (calculado al cerrar).
+  totalCashIn   Decimal @db.Decimal(14, 2) @default(0)
+  /// Monto esperado al cierre = openingAmount + totalCashIn.
+  expectedAmount Decimal @db.Decimal(14, 2) @default(0)
+  /// Monto físicamente contado por el cajero al cierre.
+  countedAmount  Decimal? @db.Decimal(14, 2)
+  /// Diferencia = countedAmount - expectedAmount (puede ser negativa).
+  difference     Decimal? @db.Decimal(14, 2)
+
+  status CashSessionStatus @default(OPEN)
+
+  /// Observaciones del cierre (especialmente cuando hay discrepancia).
+  notes String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// Pagos en efectivo vinculados a esta sesión.
+  payments Payment[]
+
+  @@index([status])
+  @@index([openedAt])
+  @@index([openedById])
+  @@map("cash_sessions")
+}

@@ -1,0 +1,176 @@
+// =====================================================================
+// SCHEMA COMMON — Enums compartidos y entidades transversales
+// =====================================================================
+
+// ----- Enums de Proyectos / Lotes ------------------------------------
+
+/// Estado de un lote dentro del inventario.
+enum LotStatus {
+  AVAILABLE
+  RESERVED
+  SOLD
+  BLOCKED
+}
+
+/// Tipo de uso del lote.
+enum LotType {
+  RESIDENTIAL
+  COMMERCIAL
+  INDUSTRIAL
+  MIXED
+}
+
+// ----- Enums de Clientes ---------------------------------------------
+
+/// Tipo de ocupación del cliente. Determina qué tabla relacionada
+/// (ClientOccupation) tendrá campos rellenos.
+enum OccupationType {
+  EMPLOYED
+  SELF_EMPLOYED
+  STUDENT
+  HOMEMAKER
+  UNEMPLOYED
+  RETIRED
+}
+
+/// Estado civil del cliente.
+enum MaritalStatus {
+  SINGLE
+  MARRIED
+  DIVORCED
+  WIDOWED
+  COHABITING
+}
+
+/// Tipo de domicilio del cliente.
+enum HousingType {
+  OWNED
+  RENTED
+  FAMILY
+  MORTGAGED
+  OTHER
+}
+
+// ----- Enums de Contratos --------------------------------------------
+
+/// Estado del contrato de venta.
+enum ContractStatus {
+  PENDING
+  ACTIVE
+  PAID_OFF
+  CANCELLED
+  INTERRUPTED
+}
+
+/// Estado de una cuota dentro del calendario de pagos.
+enum InstallmentStatus {
+  PENDING
+  PAID
+  LATE
+  PARTIAL
+}
+
+// ----- Enums de Pagos ------------------------------------------------
+
+/// Forma de pago utilizada.
+enum PaymentMethod {
+  CASH
+  TRANSFER
+  DEPOSIT
+  CHECK
+}
+
+/// Tipo de aplicación al que se destina una porción del pago.
+enum PaymentApplicationType {
+  LATE_FEE
+  INTEREST
+  PRINCIPAL
+  DOWN_PAYMENT
+  CREDIT_BALANCE
+}
+
+// ----- Enums de Caja -------------------------------------------------
+
+/// Estado de la sesión de caja.
+enum CashSessionStatus {
+  OPEN
+  CLOSED
+  DISCREPANCY
+}
+
+// ----- Enums de Usuarios y Auditoría --------------------------------
+
+/// Roles del sistema. Cada uno con un nivel diferente de permisos.
+enum UserRole {
+  ADMIN
+  OWNER
+  COLLECTOR
+  VIEWER
+}
+
+/// Tipo de acción registrada en el log de auditoría.
+///
+/// Categorías:
+///   - CRUD genérico: CREATE / UPDATE / DELETE / RESTORE
+///   - Auth: LOGIN / LOGIN_FAILED / LOGOUT / PASSWORD_CHANGE / ROLE_CHANGE
+///   - Negocio: CANCEL, PAYMENT_REGISTERED, CONTRACT_CANCELLED, LOT_STATUS_CHANGED,
+///     CASH_SESSION_OPENED, CASH_SESSION_CLOSED, EXPORT, IMPORT
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  RESTORE
+  CANCEL
+  LOGIN
+  LOGIN_FAILED
+  LOGOUT
+  PASSWORD_CHANGE
+  ROLE_CHANGE
+  PAYMENT_REGISTERED
+  CONTRACT_CANCELLED
+  LOT_STATUS_CHANGED
+  CASH_SESSION_OPENED
+  CASH_SESSION_CLOSED
+  EXPORT
+  IMPORT
+}
+
+/// Resultado de la acción auditada. Permite separar tentativas fallidas
+/// (ej: login con contraseña incorrecta) de las exitosas.
+enum AuditStatus {
+  SUCCESS
+  FAILED
+}
+
+// =====================================================================
+// MODELOS COMUNES
+// =====================================================================
+
+/// Cuentas bancarias de la empresa, utilizadas como destino de
+/// transferencias y depósitos registrados en los pagos.
+model BankAccount {
+  id            String   @id @default(uuid())
+  /// Nombre del banco (ej: "Banrural", "G&T Continental").
+  bankName      String
+  /// Número de cuenta bancaria.
+  accountNumber String   @unique
+  /// Nombre del titular registrado en el banco.
+  accountHolder String
+  /// Tipo de cuenta (ahorro, monetaria, etc.) — texto libre.
+  accountType   String?
+  /// Moneda de la cuenta (default GTQ).
+  currency      String   @default("GTQ")
+  /// Si está activa para recibir pagos.
+  isActive      Boolean  @default(true)
+  /// Notas administrativas.
+  notes         String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// Relación inversa: pagos que entraron a esta cuenta.
+  payments Payment[]
+
+  @@index([isActive])
+  @@map("bank_accounts")
+}

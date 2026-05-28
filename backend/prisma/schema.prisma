@@ -1,11 +1,18 @@
+// Archivo raíz del schema de Prisma.
+// La preview feature `prismaSchemaFolder` permite dividir el schema en múltiples archivos
+// dentro de la carpeta `prisma/` (incluyendo subcarpetas). Prisma los une al generar el cliente.
+//
+// IMPORTANTE — Validaciones de negocio:
+// Prisma no soporta triggers ni stored procedures nativamente. Las reglas como
+// "un lote no puede estar en dos contratos activos" se implementan en la capa de
+// servicio usando transacciones (`prisma.$transaction`).
+
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
+  previewFeatures = ["prismaSchemaFolder"]
 }
 
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
-
-// TODO: Definir modelos cuando se tenga el contexto completo del sistema
-// Este schema se reemplazará por completo en la siguiente etapa

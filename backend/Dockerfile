@@ -10,6 +10,11 @@ WORKDIR /app
 COPY package.json pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
 
+# Copiar prisma ANTES del generate, y antes del build (tsc lee @prisma/client tipados)
+COPY prisma ./prisma
+COPY migrations ./migrations
+RUN pnpm exec prisma generate
+
 COPY tsconfig.json ./
 COPY src ./src
 
@@ -35,10 +40,12 @@ WORKDIR /app
 COPY package.json pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile --prod
 
-COPY --from=builder /app/dist ./dist
+# Prisma schema + migraciones se necesitan en runtime para `migrate deploy`.
 COPY prisma ./prisma
-
-RUN pnpm exec prisma generate
+COPY migrations ./migrations
+COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
+COPY --from=builder /app/node_modules/@prisma ./node_modules/@prisma
 
 RUN addgroup -g 1001 -S nodejs && \
     adduser -S nodejs -u 1001

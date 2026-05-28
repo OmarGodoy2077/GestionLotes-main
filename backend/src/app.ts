@@ -1,20 +1,17 @@
 import express from "express";
 import cors from "cors";
-import healthRouter from "./routes/health";
+import { corsOptions } from "./config/cors";
+import rootRouter from "./routes";
 import { errorHandler } from "./middleware/errorHandler";
+import { requestLogger } from "./middleware/logger";
 
 const app = express();
 
-app.use(cors({
-  origin: process.env.FRONTEND_URL || "http://localhost:5173",
-  credentials: true,
-}));
+app.use(cors(corsOptions));
+app.use(express.json({ limit: "1mb" }));
+app.use(requestLogger);
 
-app.use(express.json());
-
-app.use("/health", healthRouter);
-
-// TODO: registrar routers de negocio aquí cuando estén listos
+app.use(rootRouter);
 
 app.use(errorHandler);
 

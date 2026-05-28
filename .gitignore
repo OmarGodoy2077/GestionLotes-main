@@ -28,5 +28,9 @@ Thumbs.db
 .vscode/
 .idea/
 
+# Claude Code — config personal por usuario (permisos, etc.).
+# Los SKILLS sí se versionan (.claude/skills/) para que viajen con el repo.
+.claude/settings.local.json
+
 # Prisma
 backend/prisma/migrations/dev.db

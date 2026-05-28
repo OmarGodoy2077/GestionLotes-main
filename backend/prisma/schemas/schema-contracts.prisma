@@ -1,0 +1,205 @@
+// =====================================================================
+// SCHEMA CONTRACTS — Contratos, lotes contratados y calendarios de pago
+// =====================================================================
+//
+// REGLAS DE NEGOCIO (no representables en el schema, se aplican en servicios):
+//   - Un lote sólo puede estar en UN contrato ACTIVE/PENDING a la vez.
+//     Validación en `contracts.service.ts` con `prisma.$transaction`.
+//   - Si se eliminan todos los lotes de un contrato → se cancela el contrato.
+//   - El precio del lote se persiste por línea (`priceAtContract`) como snapshot.
+//   - La tabla `PaymentSchedule` se PERSISTE (no se calcula al vuelo). Esto
+//     permite auditar pagos anticipados, renegociaciones y morosidades.
+
+/// Contrato de venta de uno o más lotes a un cliente.
+model Contract {
+  id             String @id @default(uuid())
+  /// Número de contrato legible y secuencial (ej: "CONT-2025-0001").
+  contractNumber String @unique
+
+  /// Fecha de firma del contrato.
+  contractDate DateTime @default(now())
+
+  /// Cliente principal (titular).
+  clientId String
+  client   Client @relation(fields: [clientId], references: [id], onDelete: Restrict)
+
+  /// Gestor del contrato (opcional).
+  gestorId String?
+  gestor   Gestor? @relation(fields: [gestorId], references: [id], onDelete: SetNull)
+
+  /// Estado del contrato.
+  status ContractStatus @default(PENDING)
+
+  // --- Totales (calculados en servicio y persistidos para reporting) ---
+
+  /// Precio total del contrato (suma de precios finales de los lotes).
+  totalAmount       Decimal @db.Decimal(14, 2)
+  /// Monto del enganche.
+  downPaymentAmount Decimal @db.Decimal(14, 2) @default(0)
+  /// Saldo a financiar (totalAmount - downPaymentAmount).
+  financedAmount    Decimal @db.Decimal(14, 2) @default(0)
+
+  // --- Condiciones del enganche ---
+
+  /// Si el enganche se paga fraccionado en cuotas.
+  isDownPaymentInstallment Boolean @default(false)
+  /// Número de cuotas del enganche (si es fraccionado).
+  downPaymentInstallments  Int?
+
+  // --- Condiciones del financiamiento ---
+
+  /// Años de plazo total.
+  termYears        Int?
+  /// Número total de cuotas del financiamiento.
+  numberOfPayments Int?
+  /// Tasa de interés anual (porcentaje, ej: 12.50).
+  annualRate       Decimal? @db.Decimal(6, 4)
+  /// Cuota nivelada calculada (fórmula de anualidades) y persistida.
+  nivelatedPayment Decimal? @db.Decimal(14, 2)
+  /// Fecha de la primera cuota del financiamiento.
+  firstPaymentDate DateTime?
+
+  // --- Saldos ---
+
+  /// Saldo a favor del cliente (pagos en exceso aplicables a futuras cuotas).
+  creditBalance Decimal @db.Decimal(14, 2) @default(0)
+
+  /// Observaciones generales del contrato.
+  notes String?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  /// Lotes incluidos en el contrato (con su precio histórico).
+  contractLots             ContractLot[]
+  /// Calendario de cuotas del financiamiento.
+  paymentSchedule          PaymentSchedule[]
+  /// Cuotas del enganche fraccionado (si aplica).
+  downPaymentInstallmentsList DownPaymentInstallment[]
+  /// Pagos registrados contra este contrato.
+  payments                 Payment[]
+
+  @@index([clientId])
+  @@index([gestorId])
+  @@index([status])
+  @@index([contractDate])
+  @@map("contracts")
+}
+
+/// Línea de contrato — un lote dentro de un contrato.
+/// Guarda el precio del lote al momento del contrato (snapshot histórico).
+model ContractLot {
+  id String @id @default(uuid())
+
+  contractId String
+  contract   Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+
+  lotId String
+  lot   Lot    @relation(fields: [lotId], references: [id], onDelete: Restrict)
+
+  /// Precio del lote al momento del contrato (snapshot — independiente de `lot.basePrice` actual).
+  priceAtContract Decimal @db.Decimal(14, 2)
+  /// Descuento aplicado a este lote en este contrato.
+  discount        Decimal @db.Decimal(14, 2) @default(0)
+  /// Precio final = priceAtContract - discount. Se persiste para facilitar queries.
+  finalPrice      Decimal @db.Decimal(14, 2)
+
+  /// Observaciones específicas de este lote en el contrato.
+  notes String?
+
+  /// Fecha en la que el lote fue liberado del contrato (ej: removido por
+  /// reestructura o cancelación parcial). Null mientras el lote esté vigente
+  /// dentro del contrato. Permite trazabilidad sin borrar la línea histórica.
+  releasedAt    DateTime?
+  /// Razón de la liberación (opcional).
+  releaseReason String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// Un mismo lote no puede repetirse dentro de un mismo contrato.
+  @@unique([contractId, lotId])
+  @@index([contractId])
+  @@index([lotId])
+  @@index([releasedAt])
+  @@map("contract_lots")
+}
+
+/// Calendario de pagos (tabla de amortización) PERSISTIDO.
+///
+/// Razones de persistir vs calcular al vuelo:
+///   - Pagos anticipados modifican el calendario y debe quedar histórico.
+///   - Renegociaciones de tasa cambian capital/interés a futuro.
+///   - Estado de cada cuota debe ser consultable y reportable.
+model PaymentSchedule {
+  id String @id @default(uuid())
+
+  contractId String
+  contract   Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+
+  /// Número correlativo de la cuota (1, 2, 3, …).
+  installmentNumber Int
+  /// Fecha de vencimiento.
+  dueDate           DateTime
+
+  /// Porción de capital de la cuota.
+  principalAmount Decimal @db.Decimal(14, 2)
+  /// Porción de interés de la cuota.
+  interestAmount  Decimal @db.Decimal(14, 2)
+  /// Cuota total = principalAmount + interestAmount.
+  totalAmount     Decimal @db.Decimal(14, 2)
+
+  /// Monto efectivamente pagado contra esta cuota (acumulado).
+  paidAmount Decimal @db.Decimal(14, 2) @default(0)
+  /// Mora generada por esta cuota.
+  lateFee    Decimal @db.Decimal(14, 2) @default(0)
+
+  /// Estado de la cuota.
+  status InstallmentStatus @default(PENDING)
+
+  /// Fecha en la que la cuota fue marcada como pagada (última actualización).
+  paidAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// Aplicaciones de pagos sobre esta cuota (un pago puede cubrir varias cuotas
+  /// y una cuota puede recibir aplicaciones parciales de varios pagos).
+  applications PaymentApplication[]
+
+  @@unique([contractId, installmentNumber])
+  @@index([contractId])
+  @@index([dueDate])
+  @@index([status])
+  @@map("payment_schedules")
+}
+
+/// Cuota individual del enganche cuando éste se paga fraccionado.
+model DownPaymentInstallment {
+  id String @id @default(uuid())
+
+  contractId String
+  contract   Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+
+  /// Número correlativo (1, 2, 3, …).
+  installmentNumber Int
+  /// Fecha de vencimiento.
+  dueDate           DateTime
+  /// Monto programado de esta cuota del enganche.
+  amount            Decimal  @db.Decimal(14, 2)
+
+  /// Monto efectivamente pagado contra esta cuota del enganche.
+  paidAmount Decimal           @db.Decimal(14, 2) @default(0)
+  /// Estado.
+  status     InstallmentStatus @default(PENDING)
+  paidAt     DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([contractId, installmentNumber])
+  @@index([contractId])
+  @@index([dueDate])
+  @@map("down_payment_installments")
+}
